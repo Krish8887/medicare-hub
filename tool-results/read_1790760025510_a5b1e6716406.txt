@@ -1,0 +1,1020 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState } from "react";
+     4→import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+     5→import { format } from "date-fns";
+     6→import {
+     7→  CalendarPlus,
+     8→  CalendarX,
+     9→  CheckCircle2,
+    10→  Loader2,
+    11→  MoreHorizontal,
+    12→  Pencil,
+    13→  Plus,
+    14→  Search,
+    15→  Trash2,
+    16→  XCircle,
+    17→  type LucideIcon,
+    18→} from "lucide-react";
+    19→import {
+    20→  AlertDialog,
+    21→  AlertDialogAction,
+    22→  AlertDialogCancel,
+    23→  AlertDialogContent,
+    24→  AlertDialogDescription,
+    25→  AlertDialogFooter,
+    26→  AlertDialogHeader,
+    27→  AlertDialogTitle,
+    28→} from "@/components/ui/alert-dialog";
+    29→import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+    30→import { Button } from "@/components/ui/button";
+    31→import { Card, CardContent } from "@/components/ui/card";
+    32→import {
+    33→  Dialog,
+    34→  DialogContent,
+    35→  DialogDescription,
+    36→  DialogFooter,
+    37→  DialogHeader,
+    38→  DialogTitle,
+    39→} from "@/components/ui/dialog";
+    40→import {
+    41→  DropdownMenu,
+    42→  DropdownMenuContent,
+    43→  DropdownMenuItem,
+    44→  DropdownMenuSeparator,
+    45→  DropdownMenuTrigger,
+    46→} from "@/components/ui/dropdown-menu";
+    47→import { Input } from "@/components/ui/input";
+    48→import { Label } from "@/components/ui/label";
+    49→import {
+    50→  Select,
+    51→  SelectContent,
+    52→  SelectItem,
+    53→  SelectTrigger,
+    54→  SelectValue,
+    55→} from "@/components/ui/select";
+    56→import { Skeleton } from "@/components/ui/skeleton";
+    57→import {
+    58→  Table,
+    59→  TableBody,
+    60→  TableCell,
+    61→  TableHead,
+    62→  TableHeader,
+    63→  TableRow,
+    64→} from "@/components/ui/table";
+    65→import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    66→import { Textarea } from "@/components/ui/textarea";
+    67→import { useToast } from "@/hooks/use-toast";
+    68→import {
+    69→  formatShortDate,
+    70→  getInitials,
+    71→  getJSON,
+    72→  sendJSON,
+    73→} from "@/lib/medicare-api";
+    74→import {
+    75→  Appointment,
+    76→  AppointmentStatus,
+    77→  Doctor,
+    78→  Patient,
+    79→  TIME_SLOTS,
+    80→} from "@/lib/medicare-types";
+    81→import { StatusBadge } from "@/components/medicare/status-badge";
+    82→
+    83→/* ------------------------------ local helpers ----------------------------- */
+    84→
+    85→type StatusFilter = "All" | AppointmentStatus;
+    86→
+    87→const STATUS_TABS: { value: StatusFilter; label: string }[] = [
+    88→  { value: "All", label: "All" },
+    89→  { value: "Scheduled", label: "Scheduled" },
+    90→  { value: "Completed", label: "Completed" },
+    91→  { value: "Cancelled", label: "Cancelled" },
+    92→];
+    93→
+    94→const STATUS_OPTIONS: AppointmentStatus[] = ["Scheduled", "Completed", "Cancelled"];
+    95→
+    96→interface BookingFormState {
+    97→  patientId: string;
+    98→  doctorId: string;
+    99→  date: string;
+   100→  timeSlot: string;
+   101→  reason: string;
+   102→}
+   103→
+   104→interface EditFormState {
+   105→  date: string;
+   106→  timeSlot: string;
+   107→  status: AppointmentStatus;
+   108→  reason: string;
+   109→  notes: string;
+   110→}
+   111→
+   112→interface AppointmentCreateBody {
+   113→  patientId: string;
+   114→  doctorId: string;
+   115→  date: string;
+   116→  timeSlot: string;
+   117→  reason?: string;
+   118→}
+   119→
+   120→interface RowAction {
+   121→  key: string;
+   122→  label: string;
+   123→  icon: LucideIcon;
+   124→  destructive?: boolean;
+   125→  separator?: boolean;
+   126→  onSelect: () => void;
+   127→}
+   128→
+   129→function todayISO(): string {
+   130→  return format(new Date(), "yyyy-MM-dd");
+   131→}
+   132→
+   133→function useDebouncedValue<T>(value: T, delay = 300): T {
+   134→  const [debounced, setDebounced] = useState(value);
+   135→  useEffect(() => {
+   136→    const timer = setTimeout(() => setDebounced(value), delay);
+   137→    return () => clearTimeout(timer);
+   138→  }, [value, delay]);
+   139→  return debounced;
+   140→}
+   141→
+   142→function Field({
+   143→  label,
+   144→  required,
+   145→  htmlFor,
+   146→  className,
+   147→  children,
+   148→}: {
+   149→  label: string;
+   150→  required?: boolean;
+   151→  htmlFor?: string;
+   152→  className?: string;
+   153→  children: React.ReactNode;
+   154→}) {
+   155→  return (
+   156→    <div className={`min-w-0 space-y-1.5 ${className ?? ""}`}>
+   157→      <Label htmlFor={htmlFor}>
+   158→        {label}
+   159→        {required && <span className="text-destructive"> *</span>}
+   160→      </Label>
+   161→      {children}
+   162→    </div>
+   163→  );
+   164→}
+   165→
+   166→function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint: string }) {
+   167→  return (
+   168→    <Card className="border-dashed">
+   169→      <CardContent className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+   170→        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+   171→          <Icon className="h-6 w-6" aria-hidden="true" />
+   172→        </div>
+   173→        <p className="font-medium">{title}</p>
+   174→        <p className="text-sm text-muted-foreground">{hint}</p>
+   175→      </CardContent>
+   176→    </Card>
+   177→  );
+   178→}
+   179→
+   180→function PatientCell({ name, email }: { name?: string; email?: string }) {
+   181→  if (!name) return <span className="text-muted-foreground">Unknown</span>;
+   182→  return (
+   183→    <div className="flex items-center gap-3">
+   184→      <Avatar className="h-9 w-9">
+   185→        <AvatarFallback className="bg-primary/10 text-xs font-medium text-primary">
+   186→          {getInitials(name)}
+   187→        </AvatarFallback>
+   188→      </Avatar>
+   189→      <div className="min-w-0">
+   190→        <p className="truncate font-medium">{name}</p>
+   191→        {email && <p className="truncate text-xs text-muted-foreground">{email}</p>}
+   192→      </div>
+   193→    </div>
+   194→  );
+   195→}
+   196→
+   197→function DoctorCell({ name, specialty }: { name?: string; specialty?: string }) {
+   198→  if (!name) return <span className="text-muted-foreground">Unassigned</span>;
+   199→  return (
+   200→    <div className="min-w-0">
+   201→      <p className="truncate font-medium">{name}</p>
+   202→      {specialty && <p className="truncate text-xs text-muted-foreground">{specialty}</p>}
+   203→    </div>
+   204→  );
+   205→}
+   206→
+   207→/* ------------------------------- the view --------------------------------- */
+   208→
+   209→export default function AppointmentsView() {
+   210→  const { toast } = useToast();
+   211→  const queryClient = useQueryClient();
+   212→
+   213→  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
+   214→  const [searchInput, setSearchInput] = useState("");
+   215→  const search = useDebouncedValue(searchInput);
+   216→
+   217→  const [bookingOpen, setBookingOpen] = useState(false);
+   218→  const [bookingForm, setBookingForm] = useState<BookingFormState>({
+   219→    patientId: "",
+   220→    doctorId: "",
+   221→    date: todayISO(),
+   222→    timeSlot: "",
+   223→    reason: "",
+   224→  });
+   225→
+   226→  const [editing, setEditing] = useState<Appointment | null>(null);
+   227→  const [editForm, setEditForm] = useState<EditFormState>({
+   228→    date: todayISO(),
+   229→    timeSlot: "",
+   230→    status: "Scheduled",
+   231→    reason: "",
+   232→    notes: "",
+   233→  });
+   234→
+   235→  const [deleting, setDeleting] = useState<Appointment | null>(null);
+   236→
+   237→  /* ------------------------------ data fetching ----------------------------- */
+   238→
+   239→  const appointmentsQuery = useQuery({
+   240→    queryKey: ["appointments", statusFilter, search],
+   241→    queryFn: () => {
+   242→      const params = new URLSearchParams();
+   243→      if (statusFilter !== "All") params.set("status", statusFilter);
+   244→      const trimmed = search.trim();
+   245→      if (trimmed) params.set("search", trimmed);
+   246→      const qs = params.toString();
+   247→      return getJSON<{ data: Appointment[] }>(`/api/appointments${qs ? `?${qs}` : ""}`);
+   248→    },
+   249→  });
+   250→
+   251→  const patientsQuery = useQuery({
+   252→    queryKey: ["patients-list"],
+   253→    queryFn: () => getJSON<{ data: Patient[] }>("/api/patients"),
+   254→  });
+   255→
+   256→  const doctorsQuery = useQuery({
+   257→    queryKey: ["doctors-list"],
+   258→    queryFn: () => getJSON<{ data: Doctor[] }>("/api/doctors"),
+   259→  });
+   260→
+   261→  const appointments = appointmentsQuery.data?.data ?? [];
+   262→  const patients = patientsQuery.data?.data ?? [];
+   263→  const doctors = doctorsQuery.data?.data ?? [];
+   264→  const today = todayISO();
+   265→
+   266→  /* -------------------------------- mutations ------------------------------- */
+   267→
+   268→  const invalidateAfterChange = () => {
+   269→    queryClient.invalidateQueries({ queryKey: ["appointments"] });
+   270→    queryClient.invalidateQueries({ queryKey: ["stats"] });
+   271→  };
+   272→
+   273→  const createMutation = useMutation({
+   274→    mutationFn: (body: AppointmentCreateBody) =>
+   275→      sendJSON<{ data: Appointment }>("/api/appointments", "POST", body),
+   276→    onSuccess: () => {
+   277→      toast({
+   278→        title: "Appointment booked",
+   279→        description: "The appointment has been added to the schedule.",
+   280→      });
+   281→      setBookingOpen(false);
+   282→      setBookingForm({ patientId: "", doctorId: "", date: todayISO(), timeSlot: "", reason: "" });
+   283→      invalidateAfterChange();
+   284→    },
+   285→    onError: (error: Error) =>
+   286→      toast({
+   287→        title: "Could not book appointment",
+   288→        description: error.message,
+   289→        variant: "destructive",
+   290→      }),
+   291→  });
+   292→
+   293→  const updateMutation = useMutation({
+   294→    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+   295→      sendJSON<{ data: Appointment }>(`/api/appointments/${id}`, "PUT", data),
+   296→    onSuccess: () => {
+   297→      toast({ title: "Appointment updated", description: "Your changes have been saved." });
+   298→      setEditing(null);
+   299→      invalidateAfterChange();
+   300→    },
+   301→    onError: (error: Error) =>
+   302→      toast({
+   303→        title: "Could not update appointment",
+   304→        description: error.message,
+   305→        variant: "destructive",
+   306→      }),
+   307→  });
+   308→
+   309→  const deleteMutation = useMutation({
+   310→    mutationFn: (id: string) => sendJSON<{ success: boolean }>(`/api/appointments/${id}`, "DELETE"),
+   311→    onSuccess: () => {
+   312→      toast({ title: "Appointment deleted", description: "The appointment was removed." });
+   313→      setDeleting(null);
+   314→      invalidateAfterChange();
+   315→    },
+   316→    onError: (error: Error) =>
+   317→      toast({
+   318→        title: "Could not delete appointment",
+   319→        description: error.message,
+   320→        variant: "destructive",
+   321→      }),
+   322→  });
+   323→
+   324→  /* --------------------------------- actions -------------------------------- */
+   325→
+   326→  const openBooking = () => {
+   327→    setBookingForm({ patientId: "", doctorId: "", date: todayISO(), timeSlot: "", reason: "" });
+   328→    setBookingOpen(true);
+   329→  };
+   330→
+   331→  const handleBook = () => {
+   332→    if (!bookingForm.patientId || !bookingForm.doctorId || !bookingForm.date || !bookingForm.timeSlot) {
+   333→      toast({
+   334→        title: "Missing information",
+   335→        description: "Please select a patient, doctor, date and time slot.",
+   336→        variant: "destructive",
+   337→      });
+   338→      return;
+   339→    }
+   340→    const body: AppointmentCreateBody = {
+   341→      patientId: bookingForm.patientId,
+   342→      doctorId: bookingForm.doctorId,
+   343→      date: bookingForm.date,
+   344→      timeSlot: bookingForm.timeSlot,
+   345→    };
+   346→    const reason = bookingForm.reason.trim();
+   347→    if (reason) body.reason = reason;
+   348→    createMutation.mutate(body);
+   349→  };
+   350→
+   351→  const openEdit = (appointment: Appointment) => {
+   352→    setEditing(appointment);
+   353→    setEditForm({
+   354→      date: appointment.date,
+   355→      timeSlot: appointment.timeSlot,
+   356→      status: appointment.status,
+   357→      reason: appointment.reason ?? "",
+   358→      notes: appointment.notes ?? "",
+   359→    });
+   360→  };
+   361→
+   362→  const handleSaveEdit = () => {
+   363→    if (!editing) return;
+   364→    if (!editForm.date || !editForm.timeSlot) {
+   365→      toast({
+   366→        title: "Missing information",
+   367→        description: "Please pick a date and a time slot.",
+   368→        variant: "destructive",
+   369→      });
+   370→      return;
+   371→    }
+   372→    updateMutation.mutate({
+   373→      id: editing.id,
+   374→      data: {
+   375→        date: editForm.date,
+   376→        timeSlot: editForm.timeSlot,
+   377→        status: editForm.status,
+   378→        reason: editForm.reason.trim() || null,
+   379→        notes: editForm.notes.trim() || null,
+   380→      },
+   381→    });
+   382→  };
+   383→
+   384→  /* ------------------------------- row actions ------------------------------ */
+   385→
+   386→  const rowActions = (appointment: Appointment): RowAction[] => [
+   387→    {
+   388→      key: "edit",
+   389→      label: "Edit",
+   390→      icon: Pencil,
+   391→      onSelect: () => openEdit(appointment),
+   392→    },
+   393→    ...(appointment.status === "Scheduled"
+   394→      ? [
+   395→          {
+   396→            key: "complete",
+   397→            label: "Mark Completed",
+   398→            icon: CheckCircle2,
+   399→            onSelect: () => updateMutation.mutate({ id: appointment.id, data: { status: "Completed" } }),
+   400→          },
+   401→          {
+   402→            key: "cancel",
+   403→            label: "Cancel Appointment",
+   404→            icon: XCircle,
+   405→            destructive: true,
+   406→            onSelect: () => updateMutation.mutate({ id: appointment.id, data: { status: "Cancelled" } }),
+   407→          },
+   408→        ]
+   409→      : []),
+   410→    {
+   411→      key: "delete",
+   412→      label: "Delete",
+   413→      icon: Trash2,
+   414→      destructive: true,
+   415→      separator: true,
+   416→      onSelect: () => setDeleting(appointment),
+   417→    },
+   418→  ];
+   419→
+   420→  const isLoading = appointmentsQuery.isLoading;
+   421→
+   422→  /* ---------------------------------- render -------------------------------- */
+   423→
+   424→  return (
+   425→    <div className="space-y-4">
+   426→      {/* Toolbar */}
+   427→      <div className="flex flex-wrap items-center justify-between gap-3">
+   428→        <div className="flex flex-wrap items-center gap-3">
+   429→          <Tabs value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
+   430→            <TabsList className="bg-muted">
+   431→              {STATUS_TABS.map((tab) => (
+   432→                <TabsTrigger key={tab.value} value={tab.value}>
+   433→                  {tab.label}
+   434→                </TabsTrigger>
+   435→              ))}
+   436→            </TabsList>
+   437→          </Tabs>
+   438→          <div className="relative w-full max-w-xs">
+   439→            <Search
+   440→              className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+   441→              aria-hidden="true"
+   442→            />
+   443→            <Input
+   444→              value={searchInput}
+   445→              onChange={(event) => setSearchInput(event.target.value)}
+   446→              placeholder="Search patient, doctor, reason…"
+   447→              aria-label="Search appointments"
+   448→              className="pl-9"
+   449→            />
+   450→          </div>
+   451→        </div>
+   452→        <Button onClick={openBooking} className="shrink-0">
+   453→          <Plus className="h-4 w-4" aria-hidden="true" />
+   454→          Book Appointment
+   455→        </Button>
+   456→      </div>
+   457→
+   458→      {/* Error state */}
+   459→      {appointmentsQuery.isError && (
+   460→        <Card>
+   461→          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+   462→            <p className="text-sm font-medium text-destructive">Failed to load appointments</p>
+   463→            <p className="max-w-md text-sm text-muted-foreground">
+   464→              {(appointmentsQuery.error as Error).message}
+   465→            </p>
+   466→            <Button variant="outline" size="sm" onClick={() => appointmentsQuery.refetch()}>
+   467→              Try again
+   468→            </Button>
+   469→          </CardContent>
+   470→        </Card>
+   471→      )}
+   472→
+   473→      {/* Loading state */}
+   474→      {appointmentsQuery.isLoading && !appointmentsQuery.isError && (
+   475→        <>
+   476→          <Card className="hidden gap-0 overflow-hidden py-0 md:block">
+   477→            <Table>
+   478→              <TableHeader>
+   479→                <TableRow>
+   480→                  {["Patient", "Doctor", "Date & Time", "Reason", "Status", ""].map((head, i) => (
+   481→                    <TableHead key={i}>{head}</TableHead>
+   482→                  ))}
+   483→                </TableRow>
+   484→              </TableHeader>
+   485→              <TableBody>
+   486→                {Array.from({ length: 6 }).map((_, rowIndex) => (
+   487→                  <TableRow key={rowIndex}>
+   488→                    <TableCell>
+   489→                      <div className="flex items-center gap-3">
+   490→                        <Skeleton className="h-9 w-9 rounded-full" />
+   491→                        <div className="space-y-1.5">
+   492→                          <Skeleton className="h-4 w-28" />
+   493→                          <Skeleton className="h-3 w-36" />
+   494→                        </div>
+   495→                      </div>
+   496→                    </TableCell>
+   497→                    <TableCell>
+   498→                      <div className="space-y-1.5">
+   499→                        <Skeleton className="h-4 w-24" />
+   500→                        <Skeleton className="h-3 w-20" />
+   501→                      </div>
+   502→                    </TableCell>
+   503→                    <TableCell>
+   504→                      <div className="space-y-1.5">
+   505→                        <Skeleton className="h-4 w-16" />
+   506→                        <Skeleton className="h-3 w-24" />
+   507→                      </div>
+   508→                    </TableCell>
+   509→                    <TableCell>
+   510→                      <Skeleton className="h-4 w-36" />
+   511→                    </TableCell>
+   512→                    <TableCell>
+   513→                      <Skeleton className="h-5 w-20 rounded-full" />
+   514→                    </TableCell>
+   515→                    <TableCell>
+   516→                      <Skeleton className="h-8 w-8" />
+   517→                    </TableCell>
+   518→                  </TableRow>
+   519→                ))}
+   520→              </TableBody>
+   521→            </Table>
+   522→          </Card>
+   523→          <div className="grid gap-4 md:hidden">
+   524→            {Array.from({ length: 4 }).map((_, i) => (
+   525→              <Card key={i} className="p-4">
+   526→                <div className="flex items-center gap-3">
+   527→                  <Skeleton className="h-9 w-9 rounded-full" />
+   528→                  <div className="flex-1 space-y-1.5">
+   529→                    <Skeleton className="h-4 w-32" />
+   530→                    <Skeleton className="h-3 w-24" />
+   531→                  </div>
+   532→                  <Skeleton className="h-5 w-20 rounded-full" />
+   533→                </div>
+   534→                <Skeleton className="mt-3 h-3 w-40" />
+   535→                <Skeleton className="mt-3 h-8 w-full" />
+   536→              </Card>
+   537→            ))}
+   538→          </div>
+   539→        </>
+   540→      )}
+   541→
+   542→      {/* Empty state */}
+   543→      {!isLoading &&
+   544→        !appointmentsQuery.isError &&
+   545→        appointments.length === 0 &&
+   546→        (statusFilter === "All" && !search.trim() ? (
+   547→          <EmptyState
+   548→            icon={CalendarX}
+   549→            title="No appointments found"
+   550→            hint="Book your first appointment to get started."
+   551→          />
+   552→        ) : (
+   553→          <EmptyState
+   554→            icon={CalendarX}
+   555→            title="No appointments found"
+   556→            hint="Try adjusting the status filter or search term."
+   557→          />
+   558→        ))}
+   559→
+   560→      {/* Data */}
+   561→      {!isLoading && !appointmentsQuery.isError && appointments.length > 0 && (
+   562→        <>
+   563→          {/* Desktop table */}
+   564→          <Card className="hidden gap-0 overflow-hidden py-0 md:block [&>div]:max-h-[65vh] [&>div]:overflow-y-auto">
+   565→            <Table>
+   566→              <TableHeader className="sticky top-0 z-10 bg-muted/70 backdrop-blur">
+   567→                <TableRow>
+   568→                  <TableHead>Patient</TableHead>
+   569→                  <TableHead>Doctor</TableHead>
+   570→                  <TableHead>Date &amp; Time</TableHead>
+   571→                  <TableHead>Reason</TableHead>
+   572→                  <TableHead>Status</TableHead>
+   573→                  <TableHead className="w-12">
+   574→                    <span className="sr-only">Actions</span>
+   575→                  </TableHead>
+   576→                </TableRow>
+   577→              </TableHeader>
+   578→              <TableBody>
+   579→                {appointments.map((appointment) => (
+   580→                  <TableRow key={appointment.id}>
+   581→                    <TableCell>
+   582→                      <PatientCell
+   583→                        name={appointment.patient?.name}
+   584→                        email={appointment.patient?.email}
+   585→                      />
+   586→                    </TableCell>
+   587→                    <TableCell>
+   588→                      <DoctorCell
+   589→                        name={appointment.doctor?.name}
+   590→                        specialty={appointment.doctor?.specialty}
+   591→                      />
+   592→                    </TableCell>
+   593→                    <TableCell className="whitespace-nowrap">
+   594→                      <p className="font-medium">{formatShortDate(appointment.date)}</p>
+   595→                      <p className="text-xs text-muted-foreground">{appointment.timeSlot}</p>
+   596→                    </TableCell>
+   597→                    <TableCell>
+   598→                      <div className="max-w-[220px] truncate text-muted-foreground">
+   599→                        {appointment.reason || "—"}
+   600→                      </div>
+   601→                    </TableCell>
+   602→                    <TableCell>
+   603→                      <StatusBadge status={appointment.status} />
+   604→                    </TableCell>
+   605→                    <TableCell>
+   606→                      <DropdownMenu>
+   607→                        <DropdownMenuTrigger asChild>
+   608→                          <Button
+   609→                            variant="ghost"
+   610→                            size="icon"
+   611→                            className="h-8 w-8"
+   612→                            aria-label={`Actions for appointment on ${formatShortDate(appointment.date)}`}
+   613→                          >
+   614→                            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+   615→                          </Button>
+   616→                        </DropdownMenuTrigger>
+   617→                        <DropdownMenuContent align="end" className="w-48">
+   618→                          {rowActions(appointment).map((action) => (
+   619→                            <div key={action.key}>
+   620→                              {action.separator && <DropdownMenuSeparator />}
+   621→                              <DropdownMenuItem
+   622→                                variant={action.destructive ? "destructive" : "default"}
+   623→                                onClick={action.onSelect}
+   624→                              >
+   625→                                <action.icon className="h-4 w-4" aria-hidden="true" />
+   626→                                {action.label}
+   627→                              </DropdownMenuItem>
+   628→                            </div>
+   629→                          ))}
+   630→                        </DropdownMenuContent>
+   631→                      </DropdownMenu>
+   632→                    </TableCell>
+   633→                  </TableRow>
+   634→                ))}
+   635→              </TableBody>
+   636→            </Table>
+   637→          </Card>
+   638→
+   639→          {/* Mobile cards */}
+   640→          <div className="grid gap-4 md:hidden">
+   641→            {appointments.map((appointment) => (
+   642→              <Card key={appointment.id} className="p-4">
+   643→                <div className="flex items-start justify-between gap-2">
+   644→                  <div className="flex min-w-0 items-center gap-3">
+   645→                    <Avatar className="h-10 w-10">
+   646→                      <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
+   647→                        {getInitials(appointment.patient?.name)}
+   648→                      </AvatarFallback>
+   649→                    </Avatar>
+   650→                    <div className="min-w-0">
+   651→                      <p className="truncate font-medium">
+   652→                        {appointment.patient?.name ?? "Unknown patient"}
+   653→                      </p>
+   654→                      <p className="truncate text-xs text-muted-foreground">
+   655→                        {appointment.doctor?.name ?? "Unassigned"}
+   656→                        {appointment.doctor?.specialty ? ` · ${appointment.doctor.specialty}` : ""}
+   657→                      </p>
+   658→                    </div>
+   659→                  </div>
+   660→                  <StatusBadge status={appointment.status} />
+   661→                </div>
+   662→
+   663→                <div className="mt-3 space-y-1 text-sm">
+   664→                  <p className="font-medium">
+   665→                    {formatShortDate(appointment.date)}{" "}
+   666→                    <span className="font-normal text-muted-foreground">
+   667→                      · {appointment.timeSlot}
+   668→                    </span>
+   669→                  </p>
+   670→                  {appointment.reason && (
+   671→                    <p className="line-clamp-2 text-muted-foreground">{appointment.reason}</p>
+   672→                  )}
+   673→                </div>
+   674→
+   675→                <div className="mt-3 flex items-center justify-end gap-1 border-t pt-3">
+   676→                  <Button variant="ghost" size="icon" className="h-9 w-9" aria-label="Edit appointment" onClick={() => openEdit(appointment)}>
+   677→                    <Pencil className="h-4 w-4" aria-hidden="true" />
+   678→                  </Button>
+   679→                  {appointment.status === "Scheduled" && (
+   680→                    <>
+   681→                      <Button
+   682→                        variant="ghost"
+   683→                        size="icon"
+   684→                        className="h-9 w-9 text-emerald-700 dark:text-emerald-400"
+   685→                        aria-label="Mark completed"
+   686→                        onClick={() =>
+   687→                          updateMutation.mutate({ id: appointment.id, data: { status: "Completed" } })
+   688→                        }
+   689→                      >
+   690→                        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+   691→                      </Button>
+   692→                      <Button
+   693→                        variant="ghost"
+   694→                        size="icon"
+   695→                        className="h-9 w-9 text-amber-700 dark:text-amber-400"
+   696→                        aria-label="Cancel appointment"
+   697→                        onClick={() =>
+   698→                          updateMutation.mutate({ id: appointment.id, data: { status: "Cancelled" } })
+   699→                        }
+   700→                      >
+   701→                        <XCircle className="h-4 w-4" aria-hidden="true" />
+   702→                      </Button>
+   703→                    </>
+   704→                  )}
+   705→                  <Button
+   706→                    variant="ghost"
+   707→                    size="icon"
+   708→                    className="h-9 w-9 text-destructive"
+   709→                    aria-label="Delete appointment"
+   710→                    onClick={() => setDeleting(appointment)}
+   711→                  >
+   712→                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+   713→                  </Button>
+   714→                </div>
+   715→              </Card>
+   716→            ))}
+   717→          </div>
+   718→        </>
+   719→      )}
+   720→
+   721→      {/* Booking dialog */}
+   722→      <Dialog
+   723→        open={bookingOpen}
+   724→        onOpenChange={(open) => {
+   725→          if (!open) setBookingOpen(false);
+   726→        }}
+   727→      >
+   728→        <DialogContent className="sm:max-w-lg">
+   729→          <form
+   730→            onSubmit={(event) => {
+   731→              event.preventDefault();
+   732→              handleBook();
+   733→            }}
+   734→            className="space-y-4"
+   735→          >
+   736→            <DialogHeader>
+   737→              <DialogTitle>Book Appointment</DialogTitle>
+   738→              <DialogDescription>
+   739→                Schedule a new visit between a patient and a doctor.
+   740→              </DialogDescription>
+   741→            </DialogHeader>
+   742→
+   743→            <div className="grid gap-4 sm:grid-cols-2">
+   744→              <Field label="Patient" required className="sm:col-span-2">
+   745→                <Select
+   746→                  value={bookingForm.patientId}
+   747→                  onValueChange={(value) =>
+   748→                    setBookingForm((prev) => ({ ...prev, patientId: value }))
+   749→                  }
+   750→                >
+   751→                  <SelectTrigger className="w-full" aria-label="Select patient">
+   752→                    <SelectValue placeholder="Select patient" />
+   753→                  </SelectTrigger>
+   754→                  <SelectContent>
+   755→                    {patientsQuery.isLoading ? (
+   756→                      <SelectItem value="__loading" disabled>
+   757→                        Loading patients…
+   758→                      </SelectItem>
+   759→                    ) : patients.length === 0 ? (
+   760→                      <SelectItem value="__empty" disabled>
+   761→                        No patients found
+   762→                      </SelectItem>
+   763→                    ) : (
+   764→                      patients.map((patient) => (
+   765→                        <SelectItem key={patient.id} value={patient.id}>
+   766→                          {patient.name} — {patient.email}
+   767→                        </SelectItem>
+   768→                      ))
+   769→                    )}
+   770→                  </SelectContent>
+   771→                </Select>
+   772→              </Field>
+   773→
+   774→              <Field label="Doctor" required className="sm:col-span-2">
+   775→                <Select
+   776→                  value={bookingForm.doctorId}
+   777→                  onValueChange={(value) =>
+   778→                    setBookingForm((prev) => ({ ...prev, doctorId: value }))
+   779→                  }
+   780→                >
+   781→                  <SelectTrigger className="w-full" aria-label="Select doctor">
+   782→                    <SelectValue placeholder="Select doctor" />
+   783→                  </SelectTrigger>
+   784→                  <SelectContent>
+   785→                    {doctorsQuery.isLoading ? (
+   786→                      <SelectItem value="__loading" disabled>
+   787→                        Loading doctors…
+   788→                      </SelectItem>
+   789→                    ) : doctors.length === 0 ? (
+   790→                      <SelectItem value="__empty" disabled>
+   791→                        No doctors found
+   792→                      </SelectItem>
+   793→                    ) : (
+   794→                      doctors.map((doctor) => (
+   795→                        <SelectItem key={doctor.id} value={doctor.id}>
+   796→                          {doctor.name} ({doctor.specialty})
+   797→                        </SelectItem>
+   798→                      ))
+   799→                    )}
+   800→                  </SelectContent>
+   801→                </Select>
+   802→              </Field>
+   803→
+   804→              <Field label="Date" required htmlFor="booking-date">
+   805→                <Input
+   806→                  id="booking-date"
+   807→                  type="date"
+   808→                  required
+   809→                  min={today}
+   810→                  value={bookingForm.date}
+   811→                  onChange={(event) =>
+   812→                    setBookingForm((prev) => ({ ...prev, date: event.target.value }))
+   813→                  }
+   814→                />
+   815→              </Field>
+   816→
+   817→              <Field label="Time Slot" required>
+   818→                <Select
+   819→                  value={bookingForm.timeSlot}
+   820→                  onValueChange={(value) =>
+   821→                    setBookingForm((prev) => ({ ...prev, timeSlot: value }))
+   822→                  }
+   823→                >
+   824→                  <SelectTrigger className="w-full" aria-label="Select time slot">
+   825→                    <SelectValue placeholder="Select time slot" />
+   826→                  </SelectTrigger>
+   827→                  <SelectContent>
+   828→                    {TIME_SLOTS.map((slot) => (
+   829→                      <SelectItem key={slot} value={slot}>
+   830→                        {slot}
+   831→                      </SelectItem>
+   832→                    ))}
+   833→                  </SelectContent>
+   834→                </Select>
+   835→              </Field>
+   836→
+   837→              <Field label="Reason" className="sm:col-span-2">
+   838→                <Textarea
+   839→                  rows={3}
+   840→                  placeholder="e.g. Annual check-up, chest pain follow-up…"
+   841→                  value={bookingForm.reason}
+   842→                  onChange={(event) =>
+   843→                    setBookingForm((prev) => ({ ...prev, reason: event.target.value }))
+   844→                  }
+   845→                />
+   846→              </Field>
+   847→            </div>
+   848→
+   849→            <DialogFooter className="gap-2">
+   850→              <Button type="button" variant="outline" onClick={() => setBookingOpen(false)}>
+   851→                Cancel
+   852→              </Button>
+   853→              <Button type="submit" disabled={createMutation.isPending}>
+   854→                {createMutation.isPending && (
+   855→                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+   856→                )}
+   857→                Book Appointment
+   858→              </Button>
+   859→            </DialogFooter>
+   860→          </form>
+   861→        </DialogContent>
+   862→      </Dialog>
+   863→
+   864→      {/* Edit dialog */}
+   865→      <Dialog
+   866→        open={!!editing}
+   867→        onOpenChange={(open) => {
+   868→          if (!open) setEditing(null);
+   869→        }}
+   870→      >
+   871→        <DialogContent className="sm:max-w-lg">
+   872→          <form
+   873→            onSubmit={(event) => {
+   874→              event.preventDefault();
+   875→              handleSaveEdit();
+   876→            }}
+   877→            className="space-y-4"
+   878→          >
+   879→            <DialogHeader>
+   880→              <DialogTitle>Edit Appointment</DialogTitle>
+   881→              <DialogDescription>
+   882→                {editing
+   883→                  ? `Visit for ${editing.patient?.name ?? "patient"} with ${
+   884→                      editing.doctor?.name ?? "doctor"
+   885→                    }.`
+   886→                  : "Update the appointment details."}
+   887→              </DialogDescription>
+   888→            </DialogHeader>
+   889→
+   890→            <div className="grid gap-4 sm:grid-cols-2">
+   891→              <Field label="Date" required htmlFor="edit-date">
+   892→                <Input
+   893→                  id="edit-date"
+   894→                  type="date"
+   895→                  required
+   896→                  value={editForm.date}
+   897→                  onChange={(event) =>
+   898→                    setEditForm((prev) => ({ ...prev, date: event.target.value }))
+   899→                  }
+   900→                />
+   901→              </Field>
+   902→
+   903→              <Field label="Time Slot" required>
+   904→                <Select
+   905→                  value={editForm.timeSlot}
+   906→                  onValueChange={(value) =>
+   907→                    setEditForm((prev) => ({ ...prev, timeSlot: value }))
+   908→                  }
+   909→                >
+   910→                  <SelectTrigger className="w-full" aria-label="Select time slot">
+   911→                    <SelectValue placeholder="Select time slot" />
+   912→                  </SelectTrigger>
+   913→                  <SelectContent>
+   914→                    {TIME_SLOTS.map((slot) => (
+   915→                      <SelectItem key={slot} value={slot}>
+   916→                        {slot}
+   917→                      </SelectItem>
+   918→                    ))}
+   919→                  </SelectContent>
+   920→                </Select>
+   921→              </Field>
+   922→
+   923→              <Field label="Status" required className="sm:col-span-2">
+   924→                <Select
+   925→                  value={editForm.status}
+   926→                  onValueChange={(value) =>
+   927→                    setEditForm((prev) => ({ ...prev, status: value as AppointmentStatus }))
+   928→                  }
+   929→                >
+   930→                  <SelectTrigger className="w-full" aria-label="Select status">
+   931→                    <SelectValue placeholder="Select status" />
+   932→                  </SelectTrigger>
+   933→                  <SelectContent>
+   934→                    {STATUS_OPTIONS.map((status) => (
+   935→                      <SelectItem key={status} value={status}>
+   936→                        {status}
+   937→                      </SelectItem>
+   938→                    ))}
+   939→                  </SelectContent>
+   940→                </Select>
+   941→              </Field>
+   942→
+   943→              <Field label="Reason" className="sm:col-span-2">
+   944→                <Textarea
+   945→                  rows={2}
+   946→                  placeholder="Why is the patient visiting?"
+   947→                  value={editForm.reason}
+   948→                  onChange={(event) =>
+   949→                    setEditForm((prev) => ({ ...prev, reason: event.target.value }))
+   950→                  }
+   951→                />
+   952→              </Field>
+   953→
+   954→              <Field label="Notes" className="sm:col-span-2">
+   955→                <Textarea
+   956→                  rows={3}
+   957→                  placeholder="Internal notes (optional)"
+   958→                  value={editForm.notes}
+   959→                  onChange={(event) =>
+   960→                    setEditForm((prev) => ({ ...prev, notes: event.target.value }))
+   961→                  }
+   962→                />
+   963→              </Field>
+   964→            </div>
+   965→
+   966→            <DialogFooter className="gap-2">
+   967→              <Button type="button" variant="outline" onClick={() => setEditing(null)}>
+   968→                Cancel
+   969→              </Button>
+   970→              <Button type="submit" disabled={updateMutation.isPending}>
+   971→                {updateMutation.isPending && (
+   972→                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+   973→                )}
+   974→                Save Changes
+   975→              </Button>
+   976→            </DialogFooter>
+   977→          </form>
+   978→        </DialogContent>
+   979→      </Dialog>
+   980→
+   981→      {/* Delete confirmation */}
+   982→      <AlertDialog
+   983→        open={!!deleting}
+   984→        onOpenChange={(open) => {
+   985→          if (!open) setDeleting(null);
+   986→        }}
+   987→      >
+   988→        <AlertDialogContent>
+   989→          <AlertDialogHeader>
+   990→            <AlertDialogTitle>Delete this appointment?</AlertDialogTitle>
+   991→            <AlertDialogDescription>
+   992→              {deleting
+   993→                ? `The appointment for ${deleting.patient?.name ?? "this patient"} on ${formatShortDate(
+   994→                    deleting.date
+   995→                  )} at ${deleting.timeSlot} will be permanently removed. This cannot be undone.`
+   996→                : "This appointment will be permanently removed."}
+   997→            </AlertDialogDescription>
+   998→          </AlertDialogHeader>
+   999→          <AlertDialogFooter>
+  1000→            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+  1001→            <AlertDialogAction
+  1002→              className="bg-destructive text-white hover:bg-destructive/90"
+  1003→              disabled={deleteMutation.isPending}
+  1004→              onClick={(event) => {
+  1005→                event.preventDefault();
+  1006→                if (deleting) deleteMutation.mutate(deleting.id);
+  1007→              }}
+  1008→            >
+  1009→              {deleteMutation.isPending && (
+  1010→                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+  1011→              )}
+  1012→              Delete
+  1013→            </AlertDialogAction>
+  1014→          </AlertDialogFooter>
+  1015→        </AlertDialogContent>
+  1016→      </AlertDialog>
+  1017→    </div>
+  1018→  );
+  1019→}
+  1020→

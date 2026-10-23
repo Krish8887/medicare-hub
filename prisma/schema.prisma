@@ -1,0 +1,158 @@
+// Medicare Hub - Prisma Schema
+// SQLite database for hospital/clinic management
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Doctor {
+  id              String          @id @default(cuid())
+  name            String
+  email           String          @unique
+  phone           String
+  specialty       String
+  department      String
+  experience      Int             @default(1) // years of experience
+  rating          Float           @default(4.5)
+  consultationFee Float           @default(100)
+  availability    String          @default("Available") // Available | On Leave | Off Duty
+  image           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  appointments    Appointment[]
+  records         MedicalRecord[]
+  slots           AppointmentSlot[]
+}
+
+model Patient {
+  id           String          @id @default(cuid())
+  name         String
+  email        String          @unique
+  phone        String
+  dateOfBirth  DateTime?
+  gender       String          @default("Male") // Male | Female | Other
+  bloodGroup   String?
+  address      String?
+  allergies    String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  appointments Appointment[]
+  records      MedicalRecord[]
+  invoices     Invoice[]
+}
+
+model Appointment {
+  id        String   @id @default(cuid())
+  patientId String
+  doctorId  String
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      String // ISO date string e.g. 2025-01-15
+  timeSlot  String // e.g. "09:00 AM - 09:30 AM"
+  status    String   @default("Scheduled") // Scheduled | Completed | Cancelled
+  reason    String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  invoices  Invoice[]
+
+  @@index([date])
+  @@index([status])
+}
+
+model AppointmentSlot {
+  id        String   @id @default(cuid())
+  doctorId  String
+  doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      String // YYYY-MM-DD
+  timeSlot  String // canonical slot e.g. "09:00 AM - 09:30 AM"
+  sortKey   Int // ordering index derived from the slot's start time
+  isBooked  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([doctorId, date, timeSlot])
+  @@index([date])
+  @@index([doctorId, date])
+}
+
+model Invoice {
+  id            String      @id @default(cuid())
+  invoiceNumber String      @unique // e.g. "INV-2025-0001"
+  patientId     String
+  patient       Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  items         String // JSON array: [{ description, quantity, unitPrice }]
+  subtotal      Float
+  taxRate       Float       @default(0) // percent, e.g. 5 = 5%
+  taxAmount     Float       @default(0)
+  discount      Float       @default(0) // flat amount off
+  total         Float
+  amountPaid    Float       @default(0)
+  payments      String      @default("[]") // JSON array: [{ date, amount, method, note }]
+  status        String      @default("Pending") // Draft | Pending | Paid | Cancelled ("Overdue" is derived when Pending past dueDate)
+  issueDate     String // YYYY-MM-DD
+  dueDate       String // YYYY-MM-DD
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([status])
+  @@index([patientId])
+}
+
+model MedicalRecord {
+  id           String   @id @default(cuid())
+  patientId    String
+  doctorId     String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor       Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  diagnosis    String
+  prescription String?
+  treatment    String?
+  notes        String?
+  visitType    String   @default("Consultation") // Consultation | Follow-up | Emergency | Surgery
+  recordDate   DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  headDoctor  String?
+  location    String?
+  phone       String?
+  createdAt   DateTime @default(now())
+}
+
+model User {
+  id               String    @id @default(cuid())
+  name             String
+  email            String    @unique
+  passwordHash     String // "scrypt:<salt>:<hash>" (node:crypto scrypt)
+  role             String    @default("USER") // "ADMIN" | "USER"
+  resetToken       String? // 6-digit password reset code (expires)
+  resetTokenExpiry DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model HealthArticle {
+  id        String   @id @default(cuid())
+  title     String
+  category  String
+  summary   String
+  content   String
+  author    String
+  readTime  Int      @default(5) // minutes
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
